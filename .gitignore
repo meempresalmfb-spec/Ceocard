@@ -1,0 +1,18 @@
+# Dados sensíveis — NUNCA subir pro GitHub (o repo é público)
+*.pdf
+*.xlsx
+*.csv
+painel-cartao-backup-*.json
+*.txt
+dados-plain.json
+
+# Documentação interna (só local, não publica)
+CLAUDE.md
+HISTORICO.md
+PROMPT-MENSAL.md
+
+# Versões antigas e ferramentas locais
+painel-cartao-v*.html
+ferramentas/
+
+node_modules/
