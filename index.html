@@ -177,6 +177,7 @@
       <span><label>Ver por</label><br><select id="viewBy"><option value="grupo">Grupo</option><option value="cat" selected>Categoria</option><option value="prod">Produto</option></select></span>
     </div>
     <div class="months-grid" id="monthsGrid"></div>
+    <div class="card" id="provCard" style="display:none;margin-top:16px"></div>
     <div class="detail-view" id="detailView"></div>
   </div>
 
@@ -666,6 +667,57 @@ function renderDashboard(){
       <div class="mini-bars">${bars.map(b=>`<div class="mb" title="${b[0]}: ${fmt(b[1])}" style="height:${Math.max(8,Math.abs(b[1])/maxB*100)}%;background:${hashColor(b[0])}"></div>`).join("")}</div>`;
     if(items.length)div.onclick=()=>showMonth(m);grid.appendChild(div);}
   $("#detailView").style.display="none";$("#monthsGrid").style.display="grid";
+  renderProvisao();
+}
+// ===== Provisão: parcelas ainda por vencer, derivadas das séries "Parcela n/N" (régua do Lucas, 2026-09-14) =====
+// Não grava nada: pra cada série parcelada pega a MAIOR parcela já importada (n/N) e projeta n+1..N nas faturas seguintes.
+// Quando a fatura real chega, a parcela importada substitui a projeção sozinha.
+const PARC_RE=/^(.*?)\s*-\s*Parcela\s*(\d+)\s*\/\s*(\d+)\s*$/i;
+function provisoes(){
+  const a=$("#acctFilter").value,g=$("#grupoFilter").value,p=$("#prodFilter").value;
+  const series={};
+  allTx.forEach(t=>{const m=t.desc.match(PARC_RE);if(!m)return;
+    if((a&&t.acct!==a)||(g&&grupoOf(t.cat)!==g)||(p&&t.prod!==p))return;
+    const n=+m[2],N=+m[3];if(!(n>=1&&n<=N))return;
+    // mesma compra = mesmo estabelecimento + mesmo N + mesmo valor arredondado (parcelas variam centavos entre si)
+    const key=`${m[1].trim().toUpperCase()}|${N}|${Math.round(t.val)}|${t.acct}`;
+    const s=series[key]||(series[key]={base:m[1].trim(),N,acct:t.acct,cat:t.cat,n:0});
+    if(n>s.n){s.n=n;s.val=t.val;s.tx=t;}
+  });
+  const out=[];
+  Object.values(series).forEach(s=>{
+    if(s.n>=s.N)return;
+    // mês da fatura em que a última parcela observada caiu: campo `fat` ("AAAA-MM") quando veio do pipeline mensal;
+    // senão estima pelo mês da compra (compra no mês M → parcela n cai na fatura de M+n, fechamento ~dia 6)
+    let y,m;
+    if(s.tx.fat){const f=s.tx.fat.split("-");y=+f[0];m=+f[1]-1;}
+    else{y=s.tx.ano;m=s.tx.mes+s.n;}
+    for(let k=s.n+1;k<=s.N;k++){
+      let mm=m+(k-s.n),yy=y;while(mm>11){mm-=12;yy++;}
+      out.push({y:yy,m:mm,val:s.val,desc:`${s.base} ${k}/${s.N}`,acct:s.acct,cat:s.cat,est:!s.tx.fat});
+    }
+  });
+  return out;
+}
+function renderProvisao(){
+  const card=$("#provCard");const items=provisoes();
+  if(!items.length){card.style.display="none";return;}
+  const byM={};items.forEach(i=>{const k=`${i.y}-${String(i.m+1).padStart(2,"0")}`;(byM[k]=byM[k]||{y:i.y,m:i.m,items:[]}).items.push(i);});
+  const meses=Object.keys(byM).sort();const total=items.reduce((s,i)=>s+i.val,0);
+  const nCompras=new Set(items.map(i=>i.desc.replace(/ \d+\/\d+$/,""))).size;
+  const anyEst=items.some(i=>i.est);
+  const max=Math.max(...meses.map(k=>byM[k].items.reduce((s,i)=>s+i.val,0)))||1;
+  let html=`<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:12px">
+    <h2 class="section" style="margin:0">📅 Provisão · parcelas a vencer nas próximas faturas</h2>
+    <span style="font-family:system-ui,sans-serif;font-size:22px;font-weight:700;color:var(--accent2)">${fmt(total)}</span></div>
+    <div class="mcount" style="margin-bottom:10px">${items.length} parcela(s) futura(s) de ${nCompras} compra(s) parcelada(s), agrupadas pelo mês da FATURA em que vão cair. Clique num mês pra abrir.${anyEst?" Itens com ~ são estimados pelo mês da compra.":""}</div>
+    <table><thead><tr><th>Fatura</th><th>Parcelas</th><th style="text-align:right">Valor</th></tr></thead><tbody>`;
+  meses.forEach(k=>{const b=byM[k];const v=b.items.reduce((s,i)=>s+i.val,0);
+    html+=`<tr class="cat-row" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='table-row'?'none':'table-row'">
+      <td><strong>${nomeMes[b.m]} ${b.y}</strong><div class="bar" style="width:${v/max*100}%;background:var(--accent2)"></div></td>
+      <td><span class="tag">${b.items.length}</span></td><td class="val">${fmt(v)}</td></tr>
+      <tr class="sub-rows"><td colspan="3">${b.items.sort((x,z)=>z.val-x.val).map(i=>`<span>${i.est?"~ ":""}${i.desc} <span class="tag" style="color:${hashColor(i.cat)}">${i.cat}</span> <span class="tag">${i.acct}</span> — <strong>${fmt(i.val)}</strong></span>`).join("<br>")}</td></tr>`;});
+  html+=`</tbody></table>`;card.innerHTML=html;card.style.display="block";
 }
 function showMonth(m){
   const y=+$("#yearSel").value;const items=filtered().filter(t=>t.mes===m);
@@ -686,8 +738,8 @@ function showMonth(m){
       <td class="val" style="${d.total<0?'color:var(--blue)':''}">${fmt(d.total)}</td></tr>
       <tr class="sub-rows"><td colspan="3">${d.items.map(t=>`<span class="${t.val<0?'refund':''}">${t.desc} ${badges[t.src]||""} ${vb2==="grupo"?`<span class="tag" style="color:${hashColor(t.cat)}">${t.cat}</span> `:""}${t.prod?`<span class="ptag">${t.prod}</span>`:""} <span class="tag">${t.acct}</span> — <strong>${fmt(t.val)}</strong>${t.val<0?' (reembolso)':''}</span>`).join("<br>")}</td></tr>`;});
   html+=`</tbody></table></div>`;
-  $("#detailView").innerHTML=html;$("#detailView").style.display="block";$("#monthsGrid").style.display="none";
-  $("#backBtn").onclick=()=>{$("#detailView").style.display="none";$("#monthsGrid").style.display="grid";};
+  $("#detailView").innerHTML=html;$("#detailView").style.display="block";$("#monthsGrid").style.display="none";$("#provCard").style.display="none";
+  $("#backBtn").onclick=()=>{$("#detailView").style.display="none";$("#monthsGrid").style.display="grid";renderProvisao();};
 }
 
 $("#exportBtn").onclick=async()=>{
