@@ -675,17 +675,23 @@ function renderDashboard(){
 const PARC_RE=/^(.*?)\s*-\s*Parcela\s*(\d+)\s*\/\s*(\d+)\s*$/i;
 function provisoes(){
   const a=$("#acctFilter").value,g=$("#grupoFilter").value,p=$("#prodFilter").value;
-  const series={};
+  const parc=[];
   allTx.forEach(t=>{const m=t.desc.match(PARC_RE);if(!m)return;
     if((a&&t.acct!==a)||(g&&grupoOf(t.cat)!==g)||(p&&t.prod!==p))return;
     const n=+m[2],N=+m[3];if(!(n>=1&&n<=N))return;
-    // mesma compra = mesmo estabelecimento + mesmo N + mesmo valor arredondado (parcelas variam centavos entre si)
-    const key=`${m[1].trim().toUpperCase()}|${N}|${Math.round(t.val)}|${t.acct}`;
-    const s=series[key]||(series[key]={base:m[1].trim(),N,acct:t.acct,cat:t.cat,n:0});
-    if(n>s.n){s.n=n;s.val=t.val;s.tx=t;}
+    parc.push({t,base:m[1].trim(),n,N});
+  });
+  // mesma compra = mesmo estabelecimento + mesmo N + valor até R$ 1 de diferença (parcelas variam centavos entre si;
+  // arredondar o valor separava 112,51 de 112,45). Em ordem de n, cada parcela continua a série mais próxima que parou antes dela.
+  const series=[];
+  parc.sort((x,y)=>x.n-y.n).forEach(q=>{
+    const key=`${q.base.toUpperCase()}|${q.N}|${q.t.acct}`;
+    const s=series.filter(s=>s.key===key&&s.n<q.n&&Math.abs(s.val-q.t.val)<=1).sort((x,y)=>Math.abs(x.val-q.t.val)-Math.abs(y.val-q.t.val))[0]
+      ||(series[series.length]={key,base:q.base,N:q.N,acct:q.t.acct,cat:q.t.cat,n:0,val:q.t.val});
+    s.n=q.n;s.val=q.t.val;s.tx=q.t;
   });
   const out=[];
-  Object.values(series).forEach(s=>{
+  series.forEach(s=>{
     if(s.n>=s.N)return;
     // mês da fatura em que a última parcela observada caiu: campo `fat` ("AAAA-MM") quando veio do pipeline mensal;
     // senão estima pelo mês da compra (compra no mês M → parcela n cai na fatura de M+n, fechamento ~dia 6)
